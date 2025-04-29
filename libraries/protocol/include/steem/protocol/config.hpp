@@ -9,12 +9,12 @@
 // This is checked by get_config_check.sh called from Dockerfile
 
 #ifdef IS_TEST_NET
-#define STEEM_BLOCKCHAIN_VERSION              ( version(0, 24, 0) )
+#define STEEM_BLOCKCHAIN_VERSION              ( version(0, 23, 1) )
 
 #define STEEM_INIT_PRIVATE_KEY                (fc::ecc::private_key::regenerate(fc::sha256::hash(std::string("init_key"))))
 #define STEEM_INIT_PUBLIC_KEY_STR             (std::string( steem::protocol::public_key_type(STEEM_INIT_PRIVATE_KEY.get_public_key()) ))
-#define STEEM_CHAIN_ID (fc::sha256::hash("testnet"))
-#define STEEM_ADDRESS_PREFIX                  "TST"
+#define STEEM_CHAIN_ID (fc::sha256::hash("moeckitestnet"))
+#define STEEM_ADDRESS_PREFIX                  "MTN"
 
 #define STEEM_GENESIS_TIME                    (fc::time_point_sec(1451606400))
 #define STEEM_MINING_TIME                     (fc::time_point_sec(1451606400))
