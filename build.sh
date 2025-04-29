@@ -1,0 +1,1 @@
+docker build -t moecki/steemd-testnet:0.23.1 -f Dockerfile.testnet .
