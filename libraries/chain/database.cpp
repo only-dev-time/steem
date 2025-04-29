@@ -2991,6 +2991,9 @@ void database::init_genesis( uint64_t init_supply, uint64_t sbd_init_supply )
 {
    try
    {
+#ifdef IS_TEST_NET
+      set_hardfork( STEEM_HARDFORK_0_23, true );
+#endif
       struct auth_inhibitor
       {
          auth_inhibitor(database& db) : db(db), old_flags(db.node_properties().skip_flags)
