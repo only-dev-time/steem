@@ -64,7 +64,7 @@ RUN mkdir build && \
         -DENABLE_MIRA=${ENABLE_MIRA} \
         -DSTEEM_STATIC_BUILD=${STEEM_STATIC_BUILD} \
         .. && \
-    make -j$(($(nproc) > 2 ? $(nproc) - 2 : 1)) && \
+    make -j$(nproc) && \
     make install
 
 RUN if [ "${UNIT_TEST}" = "ON" ] ; then \
