@@ -3,7 +3,7 @@ FROM ubuntu:18.04 as builder
 # The default build params are for low memory mira version.
 # This usually are used as a witness node.
 ARG CMAKE_BUILD_TYPE=Release
-ARG BUILD_TAG=0.23.1
+ARG BUILD_TAG=0.23.1-db-check-ub18
 ARG STEEM_STATIC_BUILD=ON
 ARG ENABLE_MIRA=ON
 ARG LOW_MEMORY_MODE=OFF
@@ -84,7 +84,7 @@ RUN if [ "${DOXYGEN}" = "ON" ] ; then \
 FROM ubuntu:18.04 as final
 
 ARG CMAKE_BUILD_TYPE=Release
-ARG BUILD_TAG=0.23.1
+ARG BUILD_TAG=0.23.1-db-check-ub18
 ARG STEEM_STATIC_BUILD=ON
 ARG ENABLE_MIRA=ON
 ARG LOW_MEMORY_MODE=OFF
