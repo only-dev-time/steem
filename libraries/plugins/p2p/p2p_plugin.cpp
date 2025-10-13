@@ -116,6 +116,7 @@ public:
    std::atomic_bool   activeHandleBlock;
    std::atomic_bool   activeHandleTx;
    typedef std::pair<std::promise<void>, std::shared_future<void>> handler_state;
+   bool disable = false;
 
    handler_state handleBlockFinished;
    handler_state handleTxFinished;
@@ -567,6 +568,7 @@ void p2p_plugin::set_program_options( bpo::options_description& cli, bpo::option
    cli.add_options()
       ("force-validate", bpo::bool_switch()->default_value(false), "Force validation of all transactions. Deprecated in favor of p2p-force-validate" )
       ("p2p-force-validate", bpo::bool_switch()->default_value(false), "Force validation of all transactions." )
+      ("p2p-disable", bpo::bool_switch()->default_value(false), "Disable p2p networking entirely, do not try to connect to or accept connections from any peers. Allows to request the chain." )
       ;
 }
 
@@ -636,10 +638,19 @@ void p2p_plugin::plugin_initialize(const boost::program_options::variables_map& 
       fc::variant var = fc::json::from_string( options.at("p2p-parameters").as<string>(), fc::json::strict_parser );
       my->config = var.get_object();
    }
+
+   my->disable = options.at( "p2p-disable" ).as< bool >();
 }
 
 void p2p_plugin::plugin_startup()
 {
+   if ( my->disable )
+   {
+      ilog( "P2P networking disabled on user request" );
+      my->p2p_thread.async( []{} ).wait();
+      return;
+   }
+   
    my->p2p_thread.async( [this]
    {
       my->node.reset(new graphene::net::node(my->user_agent));
@@ -706,6 +717,16 @@ const char* fStatus(std::future_status s)
 void p2p_plugin::plugin_shutdown() {
    ilog("Shutting down P2P Plugin");
    my->running.store(false);
+
+   if ( my->disable )
+   {
+      fc::promise<void>::ptr quitDone(new fc::promise<void>("P2P thread quit"));
+      my->p2p_thread.quit(quitDone.get());
+      ilog("Waiting for p2p_thread quit");
+      quitDone->wait();
+      ilog("p2p_thread quit done");
+      return;
+   }
 
    ilog("P2P Plugin: checking handle_block and handle_transaction activity");
    std::future_status bfState, tfState;

@@ -97,6 +97,7 @@ class chain_plugin_impl
       std::shared_ptr< std::thread >   write_processor_thread;
       boost::lockfree::queue< write_context* > write_queue;
       int16_t                          write_lock_hold_time = 500;
+      bool                             p2p_disable = false;
 
       vector< string >                 loaded_plugins;
       fc::mutable_variant_object       plugin_state_opts;
@@ -411,6 +412,9 @@ void chain_plugin::plugin_initialize(const variables_map& options) {
    {
       my->statsd_on_replay = options.at( "statsd-record-on-replay" ).as< bool >();
    }
+
+   my->p2p_disable = options.at( "p2p-disable" ).as< bool >();
+
 #ifdef ENABLE_MIRA
    my->database_cfg = options.at( "database-cfg" ).as< bfs::path >();
 
@@ -644,7 +648,11 @@ void chain_plugin::plugin_startup()
    ilog( "Started on blockchain with ${n} blocks", ("n", my->db.head_block_num()) );
    on_sync();
 
-   my->start_write_processing();
+   if ( my->p2p_disable ) {
+      ilog( "No write processing because of disabled P2P networking" );
+   } else {
+      my->start_write_processing();
+   }
 }
 
 void chain_plugin::plugin_shutdown()
