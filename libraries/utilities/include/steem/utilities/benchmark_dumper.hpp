@@ -77,6 +77,29 @@ public:
       index_memory_details_cntr_t index_memory_details_cntr;
    };
 
+   struct dgp_snapshot
+   {
+      uint32_t head_block_num = 0;
+      uint32_t last_irreversible_block_num = 0;
+      fc::time_point_sec time = fc::time_point_sec();
+      std::string current_witness = "";
+      int64_t current_supply = 0;
+      int64_t virtual_supply = 0;
+      int64_t current_sbd_supply = 0;
+      int64_t total_vesting_fund_steem = 0;
+      int64_t total_vesting_shares = 0;
+      int64_t pending_rewarded_vesting_shares = 0;
+      int64_t pending_rewarded_vesting_steem = 0;
+      uint16_t sbd_interest_rate = 0;
+      uint16_t sbd_print_rate = 0;
+      int64_t available_account_subsidies = 0;
+      int64_t sps_interval_ledger = 0;
+      int64_t vesting_share_price_base = 0;
+      int64_t vesting_share_price_quote = 0;
+      int64_t reward_vesting_share_price_base = 0;
+      int64_t reward_vesting_share_price_quote = 0;
+   };
+
    typedef std::vector<measurement> TMeasurements;
 
    struct TAllData
@@ -84,6 +107,7 @@ public:
       database_object_sizeof_cntr_t database_object_sizeofs;
       TMeasurements                 measurements;
       measurement                   total_measurement;
+      std::vector<dgp_snapshot>     dgp_snapshots;
    };
 
    typedef std::function<void(index_memory_details_cntr_t&, bool)> get_indexes_memory_details_t;
@@ -164,6 +188,11 @@ public:
       return _all_data.total_measurement;
    }
 
+   void dump_dgp_snapshot( const dgp_snapshot& dgp_snapshot )
+   {
+      _all_data.dgp_snapshots.push_back( dgp_snapshot );
+   }
+
 private:
    bool read_mem(pid_t pid, uint64_t* current_virtual, uint64_t* peak_virtual);
 
@@ -180,6 +209,13 @@ private:
 
 } } // steem::utilities
 
+FC_REFLECT( steem::utilities::benchmark_dumper::dgp_snapshot,
+            (head_block_num)(last_irreversible_block_num)(time)(current_witness)(current_supply)(virtual_supply)(current_sbd_supply)
+            (total_vesting_fund_steem)(total_vesting_shares)(pending_rewarded_vesting_shares)(pending_rewarded_vesting_steem)
+            (sbd_interest_rate)(sbd_print_rate)(available_account_subsidies)(sps_interval_ledger)
+            (vesting_share_price_base)(vesting_share_price_quote)(reward_vesting_share_price_base)(reward_vesting_share_price_quote)
+          )
+
 FC_REFLECT( steem::utilities::benchmark_dumper::index_memory_details_t,
             (index_name)(index_size)(item_sizeof)(item_additional_allocation)
             (additional_container_allocation)(total_index_mem_usage)
@@ -192,4 +228,4 @@ FC_REFLECT( steem::utilities::benchmark_dumper::measurement,
             (block_number)(real_ms)(cpu_ms)(current_mem)(peak_mem)(index_memory_details_cntr) )
 
 FC_REFLECT( steem::utilities::benchmark_dumper::TAllData,
-            (database_object_sizeofs)(measurements)(total_measurement) )
+            (database_object_sizeofs)(measurements)(total_measurement)(dgp_snapshots) )

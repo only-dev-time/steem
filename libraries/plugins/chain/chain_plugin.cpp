@@ -533,7 +533,7 @@ void chain_plugin::plugin_startup()
    db_open_args.replay_in_memory = my->replay_in_memory;
    db_open_args.replay_memory_indices = my->replay_memory_indices;
 
-   auto benchmark_lambda = [&dumper, &get_indexes_memory_details, dump_memory_details] ( uint32_t current_block_number,
+   auto benchmark_lambda = [&dumper, &get_indexes_memory_details, dump_memory_details, this] ( uint32_t current_block_number,
       const chainbase::database::abstract_index_cntr_t& abstract_index_cntr )
    {
       if( current_block_number == 0 ) // initial call
@@ -564,6 +564,34 @@ void chain_plugin::plugin_startup()
          ("ct", measure.cpu_ms)
          ("cm", measure.current_mem)
          ("pm", measure.peak_mem) );
+
+      try {
+         const auto& dgp = my->db.get_dynamic_global_properties();
+         steem::utilities::benchmark_dumper::dgp_snapshot dgp_snapshot{
+            dgp.head_block_number,
+            dgp.last_irreversible_block_num,
+            dgp.time,
+            dgp.current_witness,
+            dgp.current_supply.amount.value,
+            dgp.virtual_supply.amount.value,
+            dgp.current_sbd_supply.amount.value,
+            dgp.total_vesting_fund_steem.amount.value,
+            dgp.total_vesting_shares.amount.value,
+            dgp.pending_rewarded_vesting_shares.amount.value,
+            dgp.pending_rewarded_vesting_steem.amount.value,
+            dgp.sbd_interest_rate,
+            dgp.sbd_print_rate,
+            dgp.available_account_subsidies,
+            dgp.sps_interval_ledger.amount.value,
+            dgp.get_vesting_share_price().base.amount.value,
+            dgp.get_vesting_share_price().quote.amount.value,
+            dgp.get_reward_vesting_share_price().base.amount.value,
+            dgp.get_reward_vesting_share_price().quote.amount.value
+         };
+         dumper.dump_dgp_snapshot( dgp_snapshot );
+      } catch (const fc::exception& e) {
+         wlog("Unable to print dynamic_global_property_object: ${e}", ("e", e.to_detail_string()));
+      }
    };
 
    if(my->replay)
