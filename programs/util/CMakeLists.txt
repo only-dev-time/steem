@@ -17,6 +17,20 @@ add_executable( test_shared_mem test_shared_mem.cpp )
 target_link_libraries( test_shared_mem
                        PRIVATE  steem_chain steem_protocol steem_utilities fc ${CMAKE_DL_LIBS} ${PLATFORM_SPECIFIC_LIBS} )
 
+
+add_executable( compare_db compare_db.cpp )
+
+target_link_libraries( compare_db
+                       PRIVATE rocksdb fc mira steem_chain steem_protocol steem_plugins steem_utilities ${CMAKE_DL_LIBS} ${PLATFORM_SPECIFIC_LIBS} )
+
+install( TARGETS
+   compare_db
+
+   RUNTIME DESTINATION bin
+   LIBRARY DESTINATION lib
+   ARCHIVE DESTINATION lib
+)
+
 add_executable( sign_digest sign_digest.cpp )
 
 target_link_libraries( sign_digest
