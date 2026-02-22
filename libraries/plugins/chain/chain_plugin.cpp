@@ -619,6 +619,7 @@ void chain_plugin::plugin_startup()
       if( my->stop_replay_at > 0 && my->stop_replay_at == last_block_number )
       {
          ilog("Stopped blockchain replaying on user request. Last applied block number: ${n}.", ("n", last_block_number));
+         my->db.close();
          exit(EXIT_SUCCESS);
       }
    }
@@ -646,11 +647,14 @@ void chain_plugin::plugin_startup()
    }
 
    ilog( "Started on blockchain with ${n} blocks", ("n", my->db.head_block_num()) );
-   on_sync();
-
-   if ( my->p2p_disable ) {
+   
+   if ( my->p2p_disable ) 
+   {
       ilog( "No write processing because of disabled P2P networking" );
-   } else {
+   } 
+   else 
+   {
+      on_sync();
       my->start_write_processing();
    }
 }
