@@ -1,7 +1,9 @@
 #include <iostream>
 #include <vector>
 #include <thread>
-#include <chrono> // for time measurement
+#include <chrono>
+#include <atomic>
+#include <mutex>
 
 #include <steem/chain/steem_object_types.hpp> // include at first because of needed specializations for pack and unpack
 #include <steem/chain/database.hpp>
@@ -23,17 +25,64 @@
 // #include <steem/chain/pending_optional_action_object.hpp> // nothing happens there
 // #include <steem/chain/pending_required_action_object.hpp> // nothing happens there
 
-#define CONSOLE_BOLD_RED    "\033[1;31m"
-#define CONSOLE_RESET       "\033[0m"
+#define CONSOLE_BOLD_RED        "\033[1;31m"
+#define CONSOLE_RESET           "\033[0m"
+
+#define MIN_ITEMS_PER_THREAD    500'000
+#define TRIM_CACHE_INTERVALL    300'000
 
 using IndexSize = std::function<void( steem::chain::database&, int& )>;
 using IndexComparator = std::function<void( steem::chain::database&, steem::chain::database&, const fc::string&, int&, int& )>;
 struct IndexOps
 {
-    IndexSize       sizeHandler;
-    IndexComparator comparator;
+    IndexSize           sizeHandler;
+    IndexComparator     comparator;
 };
 using IndexOpsMap = std::map<fc::string, IndexOps>;
+
+struct Config
+{
+    bool                serial          = false;
+    bool                timing          = false;
+    bool                memory          = false;
+};
+static Config config;
+
+struct Progress
+{
+    std::atomic<int>    processed       = 0;
+    int                 total           = 0;
+    std::atomic<int>    last_percent    = -1;
+    std::mutex          print_mutex;
+};
+
+static int initConfig(int argc, char** argv) {
+    for (int i = 3; i < argc; ++i)
+    {
+        const std::string arg = argv[i];
+        if (arg == "--time" || arg == "-t")
+        {
+            config.timing = true;
+            std::cout << "Timing enabled for comparisons" << std::endl;
+        }
+        else if (arg == "--memory" || arg == "-m")
+        {
+            config.memory = true;
+            std::cout << "Memory usage reporting enabled" << std::endl;
+        }
+        else
+        {
+            std::cerr << "Unknown argument: " << arg << std::endl;
+            return 2;
+        }
+    }
+
+    // multithreading and trimming cache is not compatible, so default to serial mode
+    config.serial = true;
+    std::cout << "Running in serial mode (no multithreading)" << std::endl;
+
+    return 0;
+}
 
 static void get_different_indices( const std::vector<fc::string>& db1_indices, const std::vector<fc::string>& db2_indices, std::vector<fc::string>& in_db1_not_in_db2, std::vector<fc::string>& in_db2_not_in_db1 )
 {
@@ -102,16 +151,19 @@ static void print_hex_diff( const std::vector<char>& a, const std::vector<char>&
         }
         std::cout << std::endl;
     }
+    std::cout << std::dec << std::setfill(' ');
 }
 
 static void print_index_numbers( const std::vector<fc::string>& db1_data_indices, const std::vector<fc::string>& db2_data_indices )
 {
-    const auto difference = (db1_data_indices.size() > db2_data_indices.size())
-        ? (db1_data_indices.size() - db2_data_indices.size())
-        : (db2_data_indices.size() - db1_data_indices.size());
+    const auto db1_ind_size = db1_data_indices.size();
+    const auto db2_ind_size = db2_data_indices.size();
+
+    const auto difference = (db1_ind_size > db2_ind_size)
+        ? (db1_ind_size - db2_ind_size) : (db2_ind_size - db1_ind_size);
     std::cout << "-------------------------------------------------------" << std::endl;
     std::cout << "Number of data indices" << std::endl;
-    std::cout << "DB1: " << db1_data_indices.size() << " | DB2: " << db2_data_indices.size();
+    std::cout << "DB1: " << db1_ind_size << " | DB2: " << db2_ind_size;
     
     if (difference > 0)
     {
@@ -136,9 +188,9 @@ static void print_index_numbers( const std::vector<fc::string>& db1_data_indices
     }
 }
 
-static void print_index_sizes( const fc::string& index_name, const int& size1, const int& size2 )
+static void print_index_sizes( const fc::string& index_name, const int& db1_ind_size, const int& db2_ind_size )
 {
-    const bool different_sizes = (size1 != size2);
+    const bool different_sizes = (db1_ind_size != db2_ind_size);
     // lamda function to format string with fixed width
     auto format_string = [](const fc::string& str, const std::size_t& width) {
         if (str.length() >= width)
@@ -146,10 +198,10 @@ static void print_index_sizes( const fc::string& index_name, const int& size1, c
         return fc::string(str + fc::string(width - str.length(), ' ')); 
     };
     std::cout << std::endl << fc::string(index_name) << ":" << std::endl;
-    std::cout << format_string(fc::string( "--- Size: DB1: " + (size1 < 0 ? "-" : std::to_string(size1) ) ), 26U);
-    std::cout << format_string(fc::string( "| DB2: " + (size2 < 0 ? "-" : std::to_string(size2) ) ), 17U);
+    std::cout << format_string(fc::string( "--- Size: DB1: " + (db1_ind_size < 0 ? "-" : std::to_string(db1_ind_size) ) ), 26U);
+    std::cout << format_string(fc::string( "| DB2: " + (db2_ind_size < 0 ? "-" : std::to_string(db2_ind_size) ) ), 17U);
     if (different_sizes)
-        std::cout << CONSOLE_BOLD_RED << " (" << std::dec << std::abs(size1 - size2) << ")" << CONSOLE_RESET << std::endl;
+        std::cout << CONSOLE_BOLD_RED << " (" << std::dec << std::abs(db1_ind_size - db2_ind_size) << ")" << CONSOLE_RESET << std::endl;
     else
         std::cout << std::endl;
 }
@@ -159,6 +211,29 @@ static void print_index_compare_results( const int& equal, const int& diff )
     std::cout << fc::string("--- Comparison result: equal: " + (equal < 0 ? "-" : std::to_string(equal)));
     std::cout << fc::string(", diff: " + (diff < 0 ? "-" : std::to_string(diff)));
     std::cout << std::endl;
+}
+
+[[maybe_unused]] static void print_db_memory_usage( steem::chain::database& db1, steem::chain::database& db2 )
+{
+    auto print_db_cache_usage = []( const steem::chain::database& db, const fc::string& db_name ) {
+        std::cout << "--- " << db_name << " memory: ";
+        std::cout << "Cache usage: " << db.get_cache_usage() << ", Cache size: " << db.get_cache_size() << std::endl;
+    };
+
+    print_db_cache_usage( db1, "DB1" );
+    print_db_cache_usage( db2, "DB2" );
+}
+
+template <typename IndexContainer>
+[[maybe_unused]] static void print_index_cache_usage( const IndexContainer& idx1, const IndexContainer& idx2 )
+{
+    auto print_cache_usage = []( const IndexContainer& idx, const fc::string& db_name ) {
+        std::cout << "--- " << db_name << " memory: ";
+        std::cout << "Index cache usage: " << idx.get_cache_usage() << ", Index cache size: " << idx.get_cache_size() << std::endl;
+    };
+
+    print_cache_usage( idx1, "DB1" );
+    print_cache_usage( idx2, "DB2" );
 }
 
 // search for subdirectories in a given directory
@@ -184,13 +259,22 @@ static std::vector<fc::string> get_indices_from_subdirs(const fc::path& dir)
     return indices;
 }
 
+static void trim_db_cache()
+{
+    mira::multi_index::detail::cache_manager::get()->adjust_capacity();
+}
+
 template <typename It>
-static void compare_slice(const It it1_first, const It it1_last, const It it2_first, const It it2_last, const fc::string& index_name, int& equal, int& diff)
+static void compare_slice(const It it1_first, const It it1_last, const It it2_first, const It it2_last, const fc::string& index_name, int& equal, int& diff, Progress* progress = nullptr)
 {
     auto it1 = it1_first;
     auto it2 = it2_first;
     equal = 0;
     diff = 0;
+    std::vector<char> b1;
+    std::vector<char> b2;
+    const int progress_total = progress ? progress->total : -1;
+    int slice_processed = 0;
     
     // std::cout << "slice size: " << std::distance(it1_first, it1_last) << ", first ids: " << it1->id._id << ", " << it2->id._id << std::endl;
 
@@ -207,8 +291,9 @@ static void compare_slice(const It it1_first, const It it1_last, const It it2_fi
 
         if (id1 == id2)
         {
-            std::vector<char> b1;
-            std::vector<char> b2;
+            b1.clear();
+            b2.clear();
+
             try 
             {
                 b1 = fc::raw::pack_to_vector( *it1 );
@@ -217,19 +302,32 @@ static void compare_slice(const It it1_first, const It it1_last, const It it2_fi
             catch (...) 
             {
                 std::cerr << "Error packing objects in " << index_name << " with id " << id1 << std::endl;
+                b1.clear();
+                b2.clear();
             }
-            if (b1 == b2) 
+
+            if (b1 == b2 && !b1.empty())
             {
                 ++equal;
-            } 
-            else 
+            }
+            else
             {
-                try 
+                try
                 {
-                    if (diff < 5)
+                    // print only the first difference
+                    if (diff < 1)
                     {
-                        std::cout << "--- Difference in " << index_name << ": id = " << id1 << " ---" << std::endl;
-                        print_hex_diff( b1, b2 );
+                        if (progress)
+                        {
+                            std::lock_guard<std::mutex> lg(progress->print_mutex);
+                            std::cout << "\r--- Difference in id = " << id1 << " ---" << std::endl;
+                            print_hex_diff( b1, b2 );
+                        }
+                        else
+                        {
+                            std::cout << "--- Difference in id = " << id1 << " ---" << std::endl;
+                            print_hex_diff( b1, b2 );
+                        }
                     }
                 }
                 catch(...) {}
@@ -242,6 +340,22 @@ static void compare_slice(const It it1_first, const It it1_last, const It it2_fi
         }
         ++it1;
         ++it2;
+        ++slice_processed;
+
+        // progress tracking for parallel execution
+        if (progress && progress_total > 0)
+        {
+            const int processed = ++progress->processed;
+            const int percent = (processed * 100) / progress_total;
+            const int last_percent = progress->last_percent.exchange(percent);
+            if (percent != last_percent)
+            {
+                std::lock_guard<std::mutex> lg(progress->print_mutex);
+                std::cout << "\r" "--- Progress: " << percent << "% (" << processed << "/" << progress_total << ")" << std::flush;
+            }
+        }
+        if (slice_processed % TRIM_CACHE_INTERVALL == 0)
+            trim_db_cache();
     }
 
 }
@@ -249,7 +363,7 @@ static void compare_slice(const It it1_first, const It it1_last, const It it2_fi
 template <typename Index>
 static void compare_indices(const Index& idx1, const Index& idx2, const fc::string& index_name, int& equal, int& diff)
 {
-    constexpr std::uint32_t min_per_thread = 500'000;
+    constexpr std::uint32_t min_per_thread = MIN_ITEMS_PER_THREAD;
     const auto size1 = idx1.size();
     const auto size2 = idx2.size();
 
@@ -257,18 +371,24 @@ static void compare_indices(const Index& idx1, const Index& idx2, const fc::stri
     if ( size == 0 )
         return;
 
-    if ( size < min_per_thread * 2 )
+    // progress tracking for parallel execution
+    std::shared_ptr<Progress> progress = std::make_shared<Progress>();
+    progress->total = size;
+
+    if ( config.serial || size < min_per_thread * 2 )
     {
-        compare_slice( idx1.begin(), idx1.end(), idx2.begin(), idx2.end(), index_name, equal, diff );
+        compare_slice( idx1.begin(), idx1.end(), idx2.begin(), idx2.end(), index_name, equal, diff, progress.get() );
+        // print 100% progress
+        std::cout << "\r" "--- Progress finished (" << progress->processed.load() << "/" << progress->total << ")" << std::endl;
         return;
     }
 
     const std::uint32_t hw = std::thread::hardware_concurrency();
-    const std::uint32_t num_cpus = (hw > 0) ? hw : 1;
+    const std::uint32_t num_procs = (hw > 0) ? hw : 1;
 
     // every thread should process at least min_per_thread elements
     const std::uint32_t max_threads = size / min_per_thread;
-    const std::uint32_t num_threads = std::min( num_cpus / 2, max_threads );
+    const std::uint32_t num_threads = std::min( num_procs / 2, max_threads );
 
     std::vector<int> local_equals(num_threads, 0);
     std::vector<int> local_diffs(num_threads, 0);
@@ -311,9 +431,10 @@ static void compare_indices(const Index& idx1, const Index& idx2, const fc::stri
                                   auto it2_last_, 
                                   const fc::string& index_name_, 
                                   int& local_equal, 
-                                  int& local_diff) 
+                                  int& local_diff,
+                                  Progress* progress_) 
             {
-                compare_slice( it1_first_, it1_last_, it2_first_, it2_last_, index_name_, local_equal, local_diff );
+                compare_slice( it1_first_, it1_last_, it2_first_, it2_last_, index_name_, local_equal, local_diff, progress_ );
             },
             it1_first, 
             it1_last, 
@@ -321,7 +442,8 @@ static void compare_indices(const Index& idx1, const Index& idx2, const fc::stri
             it2_last, 
             index_name, 
             std::ref(local_equals[t]), 
-            std::ref(local_diffs[t])
+            std::ref(local_diffs[t]),
+            progress.get()
         );
         
         // the next previous last iterators is the current last iterators
@@ -335,6 +457,12 @@ static void compare_indices(const Index& idx1, const Index& idx2, const fc::stri
     // accumulate results
     equal = std::accumulate( local_equals.begin(), local_equals.end(), 0 );
     diff  = std::accumulate( local_diffs.begin(), local_diffs.end(), 0 );
+
+    // print 100% progress finally
+    {
+        std::lock_guard<std::mutex> lg(progress->print_mutex);
+        std::cout << "\r" "--- Progress finished (" << progress->processed.load() << "/" << progress->total << ")" << std::endl;
+    }
 }
 
 static IndexOpsMap build_index_ops()
@@ -357,16 +485,32 @@ static IndexOpsMap build_index_ops()
         ops.comparator = [] ( steem::chain::database& db1, steem::chain::database& db2, const fc::string& index_name, int& equal, int& diff ) {
             try 
             {
-                const auto& idx1 = db1.get_index<Index>().indices().template get<steem::chain::by_id>();
-                const auto& idx2 = db2.get_index<Index>().indices().template get<steem::chain::by_id>();
+                auto& idxcont1 = db1.get_mutable_index<Index>().mutable_indices();
+                auto& idxcont2 = db2.get_mutable_index<Index>().mutable_indices();
+                const auto& idx1 = idxcont1.template get<steem::chain::by_id>();
+                const auto& idx2 = idxcont2.template get<steem::chain::by_id>();
 
-                // time measurement start
-                // const auto start{std::chrono::steady_clock::now()};
+                std::chrono::steady_clock::time_point start;
+                if (config.timing)
+                    start = std::chrono::steady_clock::now();
+
                 compare_indices( idx1, idx2, index_name, equal, diff );
-                // time measurement end
-                // const auto finish{std::chrono::steady_clock::now()};
-                // const std::chrono::duration<double> elapsed_seconds{finish - start};
-                // std::cout << "Time to compare index " << index_name << ": " << elapsed_seconds.count() << "s\n";                
+
+                if (config.timing)
+                {
+                    const auto finish = std::chrono::steady_clock::now();
+                    const std::chrono::duration<double> elapsed_seconds = finish - start;
+                    std::cout << "--- Elapsed time: ";
+                    if (elapsed_seconds.count() < 0.001)
+                        std::cout << "< 0.001";
+                    else
+                        std::cout << elapsed_seconds.count();
+                    std::cout << "s" << std::endl;
+                }
+
+                trim_db_cache();
+                if (config.memory)
+                    print_index_cache_usage( idxcont1, idxcont2 );
             }
             catch ( const std::exception& e )
             {
@@ -448,9 +592,6 @@ static IndexOpsMap build_index_ops()
     {
         for ( auto& idx : abstract_index_cntr )
         {
-            // idx = chainbase::abstract_index*
-            // sind die gleichen infos wie in replay_benchmark ausgegeben wird
-
             auto info = idx->get_statistics(true);
             std::cout << " - " << info._value_type_name << ": item_count: " << info._item_count << "| item_sizeof: " << info._item_sizeof << std::endl;
         }
@@ -461,7 +602,7 @@ static void open_database( steem::chain::database& db, const fc::path& base_path
 {
     fc::variant database_config;
 
-    const auto db_config_path = base_path / "database.cfg";
+    const fc::path db_config_path = base_path / "database.cfg";
     database_config = fc::json::from_file( db_config_path, fc::json::strict_parser );
 
     db_open_args.data_dir = base_path / "/blockchain";
@@ -472,11 +613,11 @@ static void open_database( steem::chain::database& db, const fc::path& base_path
     std::cout << "-------------------------------------------------------" << std::endl;
     std::cout << "Open database from " << base_path.string() << std::endl;
     db.open( db_open_args );
+    std::cout << "Revision: " << db.revision() << ", Head Block: " << db.head_block_num() << std::endl;
 }
 
 int main(int argc, char** argv)
 {
-    // database
     steem::chain::database db1;
     steem::chain::database db2;
     steem::chain::database::open_args db1_open_args;
@@ -484,20 +625,24 @@ int main(int argc, char** argv)
 
     if (argc < 3)
     {
-       std::cerr << "Usage: rocksdb_dump <chain_directory_db1> <chain_directory_db2>" << std::endl;
+       std::cerr << "Usage: compare_db <chain_directory_db1> <chain_directory_db2> [--serial|-s] [--time|-t] [--memory|-m]" << std::endl;
        return 2;
     }
-    
+    if (initConfig(argc, argv) > 0) 
+    {
+        std::cerr << "Usage: compare_db <chain_directory_db1> <chain_directory_db2> [--serial|-s] [--time|-t] [--memory|-m]" << std::endl;
+        return 2;
+    }
+
     open_database( db1, fc::path( argv[1] ), db1_open_args );
     const std::vector<fc::string> db1_data_indices = get_indices_from_subdirs( db1_open_args.data_dir );
     print_index_delegates( db1 );
-    // print_object_types( db1 );
     
     open_database( db2, fc::path( argv[2] ), db2_open_args );
     const std::vector<fc::string> db2_data_indices = get_indices_from_subdirs( db2_open_args.data_dir );
     print_index_delegates( db2 );
     
-    // build combined ops (handlers + comparators) per index type
+    // combined ops (handlers + comparators) per index type
     const IndexOpsMap idx_ops = build_index_ops();
 
     // print comparison of data indices
@@ -533,10 +678,13 @@ int main(int argc, char** argv)
                 it->second.comparator( db1, db2, idx_name, equal, diff );
                 print_index_compare_results( equal, diff);
             }
+            
+            if (config.memory)
+                print_db_memory_usage( db1, db2 );
         }
         else
         {
-            std::cout << "No runtime handler registered for index: " << idx_name << std::endl;
+            std::cout << std::endl << "No runtime handler registered for index: " << idx_name << std::endl;
         }
     }
 
